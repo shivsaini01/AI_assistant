@@ -20,8 +20,7 @@ BASE_DIR = r"C:\AI_Assistant"
 
 SAFE_FOLDER = os.path.join(
     BASE_DIR,
-    "skills",
-    "test_prompt"
+    "skills"
 )
 
 MAX_HISTORY_MESSAGES = 12
@@ -142,6 +141,7 @@ def detect_actions(user_input):
         "streaming setup",
         "streaming software",
         "recording setup",
+        "recording software",
         "stream setup",
     )
 
@@ -315,7 +315,6 @@ def user_wants_file(text):
     # yt.py
     # signal.py
     # calculator.py
-    #
 
     filename_pattern = (
         rf"\b[\w\-. ]+\.({FILE_EXTENSIONS})\b"
@@ -510,7 +509,7 @@ RULES:
 10. If the user asks to open a website/app, generate code
     that actually opens it instead of calling an API unless
     the user explicitly asks for an API.
-11. The file will be saved inside:
+11. The file will be saved directly inside:
 
 {SAFE_FOLDER}
 
@@ -625,7 +624,7 @@ def create_file_from_response(response):
 
         data = json.loads(text)
 
-    except Exception as e:
+    except Exception:
 
         print(
             "AI: I couldn't generate "
@@ -638,6 +637,7 @@ def create_file_from_response(response):
         data,
         dict
     ):
+
         print(
             "AI: Invalid file data."
         )
@@ -682,6 +682,7 @@ def create_file_from_response(response):
         filename,
         content
     ):
+
         print(
             "AI: I couldn't create the file."
         )
@@ -887,14 +888,6 @@ while True:
     # IMPORTANT:
     # FILE CREATION MUST COME FIRST
     # =====================================================
-    #
-    # This fixes:
-    #
-    # "write a code to open youtube in yt.py"
-    #
-    # We create/update yt.py instead of trying to
-    # execute an old/missing yt.py.
-    #
 
     if user_wants_file(
         user_input
@@ -914,9 +907,6 @@ while True:
     # =====================================================
     # FAST PC / SKILL ACTIONS
     # =====================================================
-    #
-    # These do NOT use Qwen.
-    #
 
     actions = detect_actions(
         user_input

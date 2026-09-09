@@ -37,12 +37,47 @@
     },
     "open obs": {
         "name": "Open OBS",
-        "filename": "obs2.py",
+        "filename": "test.py",
         "triggers": [
             "open obs",
+            "launch obs",
             "start obs",
+            "test.py",
             "obs2.py"
         ],
-        "description": "Opens OBS application"
+        "description": "Launches OBS Studio using the system's default method."
+    },
+    "display system time": {
+        "name": "Display System Time",
+        "filename": "time2.py",
+        "triggers": [
+            "time2",
+            "show time",
+            "current time",
+            "time2.py"
+        ],
+        "description": "Prints the current date and time from the system."
+    },
+    "fetch internet time": {
+        "name": "Fetch Internet Time",
+        "filename": "test12.py",
+        "triggers": [
+            "fetch time",
+            "get current time",
+            "check time online",
+            "test12.py"
+        ],
+        "description": "Fetches and prints the current time from the internet."
+    },
+    "display current date and time": {
+        "name": "Display Current Date and Time",
+        "filename": "test.py",
+        "triggers": [
+            "display date and time",
+            "show current date and time",
+            "print date and time",
+            "test.py"
+        ],
+        "description": "Prints the current date and time to the console."
     }
 }
