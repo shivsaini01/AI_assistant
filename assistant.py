@@ -1,22 +1,30 @@
-MODEL = "qwen2.5:7b-instruct-q3_K_M"
-
 import json
+import os
 import re
 
 from ollama import chat
-from commands import execute_command, create_file
+from commands import (
+    execute_command,
+    create_file,
+    register_skill,
+)
 
 
 # =========================================================
 # SETTINGS
 # =========================================================
 
-SAFE_FOLDER = r"C:\AI_Assistant\test_prompt"
+MODEL = "qwen2.5:7b-instruct-q3_K_M"
 
+BASE_DIR = r"C:\AI_Assistant"
 
-# =========================================================
-# CONVERSATION MEMORY
-# =========================================================
+SAFE_FOLDER = os.path.join(
+    BASE_DIR,
+    "skills",
+    "test_prompt"
+)
+
+MAX_HISTORY_MESSAGES = 12
 
 conversation = []
 
@@ -24,107 +32,303 @@ USER_NAME = None
 
 
 # =========================================================
-# SYSTEM PROMPT
+# LOCAL AI SETTINGS
+# =========================================================
+
+CHAT_OPTIONS = {
+    "temperature": 0.3,
+    "num_ctx": 4096,
+    "num_predict": 512,
+    "keep_alive": "10m",
+}
+
+
+# =========================================================
+# NORMAL AI SYSTEM PROMPT
 # =========================================================
 
 SYSTEM_PROMPT = """
-You are Jarvis, a helpful PC assistant.
+You are Jarvis, a fast local PC assistant.
 
 Your name is Jarvis.
 
-Answer normal questions naturally.
+Answer normal questions naturally and directly.
 
-You should remember information the user tells you during this
-conversation.
+Do not claim you performed a computer action unless Python
+actually performed it.
 
-If the user tells you their name, remember it and use it when
-appropriate.
+Do not invent PC capabilities.
 
-Do NOT create files for normal questions.
+Keep normal answers concise unless the user asks for detail.
 
-Do NOT create files for:
-- greetings
-- normal conversation
-- math questions
-- general questions
+Approved PC skills are handled by Python before this prompt
+is called.
 
-A file should only be created when the user explicitly asks to:
-- create a file
-- make a file
-- write code/file content into a file
-- save something to a file
-- create a script
-- write something into a filename such as test.py
-
-You are running as a PC assistant.
+If the user asks for code, answer normally unless they
+explicitly ask you to create/write/save the code into a file.
 """
 
 
 # =========================================================
-# FILE EXTENSIONS
+# FAST ACTION DETECTION
 # =========================================================
 
-FILE_EXTENSIONS = (
-    "py|txt|json|html|htm|css|js|jsx|ts|tsx|cpp|c|h|"
-    "java|md|csv|xml|yaml|yml|sql|sh|bat|ps1"
+ACTION_WORDS = (
+    "open",
+    "launch",
+    "start",
+    "run",
+    "fire up",
+    "bring up",
+    "get up",
+    "load",
+    "turn on",
+)
+
+NEGATIVE_WORDS = (
+    "what is",
+    "what's",
+    "who is",
+    "tell me about",
+    "explain",
+    "how does",
+    "meaning of",
+    "about",
 )
 
 
+def has_action_intent(text):
+    text = text.lower().strip()
+
+    if any(
+        phrase in text
+        for phrase in NEGATIVE_WORDS
+    ):
+        return False
+
+    return any(
+        word in text
+        for word in ACTION_WORDS
+    )
+
+
+def detect_actions(user_input):
+    """
+    Detect registered/approved applications quickly.
+
+    IMPORTANT:
+    This function should NOT run for file-creation requests.
+    File requests are handled first in the main loop.
+    """
+
+    text = re.sub(
+        r"\s+",
+        " ",
+        user_input.lower().strip()
+    )
+
+    if not has_action_intent(text):
+        return []
+
+    found = []
+
+    # -----------------------------------------------------
+    # OBS
+    # -----------------------------------------------------
+
+    obs_targets = (
+        "obs",
+        "obs studio",
+        "streaming setup",
+        "streaming software",
+        "recording setup",
+        "stream setup",
+    )
+
+    if any(
+        target in text
+        for target in obs_targets
+    ):
+        found.append("open_obs")
+
+    # -----------------------------------------------------
+    # BRAVE
+    # -----------------------------------------------------
+
+    brave_targets = (
+        "brave",
+        "brave browser",
+        "my browser",
+        "the browser",
+        "browser",
+    )
+
+    if any(
+        target in text
+        for target in brave_targets
+    ):
+        found.append("open_brave")
+
+    # -----------------------------------------------------
+    # THE LAST OF US
+    # -----------------------------------------------------
+
+    tlou_targets = (
+        "the last of us",
+        "last of us",
+        "tlou",
+        "the game",
+        "my game",
+    )
+
+    if any(
+        target in text
+        for target in tlou_targets
+    ):
+        found.append("open_last_of_us")
+
+    # -----------------------------------------------------
+    # DYNAMIC SKILLS
+    # -----------------------------------------------------
+    #
+    # Example:
+    #
+    # YouTube -> yt.py
+    #
+    # Signal -> signal.py
+    #
+    # These are resolved by commands.py.
+    #
+
+    if not found:
+        skill = None
+
+        try:
+            from commands import find_skill
+
+            skill = find_skill(text)
+
+        except Exception:
+            skill = None
+
+        if skill:
+            found.append(
+                skill
+                .get("name", "")
+                .strip()
+                .lower()
+            )
+
+    return list(
+        dict.fromkeys(found)
+    )
+
+
 # =========================================================
-# DETECT FILE REQUEST
+# ACTION MESSAGES
 # =========================================================
 
-def user_wants_file(user_input):
-    text = user_input.lower().strip()
+ACTION_MESSAGES = {
+    "open_obs": "OBS is open.",
+    "open_brave": "Brave is open.",
+    "open_last_of_us": "The Last of Us is opening.",
+}
 
-    # Explicit file actions
-    file_actions = [
-        "create a file",
-        "create an file",
-        "create file",
-        "make a file",
-        "make an file",
-        "make file",
-        "write a file",
-        "save a file",
-        "create a python file",
-        "make a python file",
-        "create a text file",
-        "make a text file",
-        "create a script",
-        "make a script",
-        "write code in",
-        "write code into",
-        "write code to",
-        "put code in",
-        "put code into",
-        "save code in",
-        "save code to",
-    ]
 
-    for phrase in file_actions:
-        if phrase in text:
-            return True
+def perform_actions(actions):
+    for action in actions:
+        result = execute_command(action)
 
-    # Detect filenames such as:
-    # test.py
+        if result and result.get("success"):
+            filename = result.get("filename", "")
+            name = result.get("name", "Skill")
+
+            if filename:
+                print(f"AI: Running {filename} — Opening {name}...")
+            else:
+                print(f"AI: Opening {name}...")
+
+        elif result:
+            filename = result.get("filename", "")
+            name = result.get("name", "skill")
+
+            if filename:
+                print(f"AI: Couldn't run {filename}.")
+            else:
+                print(f"AI: Couldn't open {name}.")
+
+        else:
+            print(f"AI: I couldn't find a skill for {action}.")
+
+
+# =========================================================
+# FILE REQUEST DETECTION
+# =========================================================
+
+FILE_EXTENSIONS = (
+    "py|txt|json|html|htm|css|js|jsx|ts|tsx|"
+    "cpp|c|h|java|md|csv|xml|yaml|yml|sql|sh|bat|ps1"
+)
+
+
+FILE_ACTIONS = (
+    "create a file",
+    "create file",
+    "make a file",
+    "make file",
+    "write a file",
+    "save a file",
+    "create a python file",
+    "make a python file",
+    "create a text file",
+    "make a text file",
+    "create a script",
+    "make a script",
+    "write code in",
+    "write code into",
+    "write code to",
+    "put code in",
+    "put code into",
+    "save code in",
+    "save code to",
+)
+
+
+def user_wants_file(text):
+    """
+    Detect explicit file-generation requests.
+
+    This MUST run before action detection.
+    """
+
+    text = text.lower().strip()
+
+    # Strong explicit file request.
+    if any(
+        phrase in text
+        for phrase in FILE_ACTIONS
+    ):
+        return True
+
+    # Filename such as:
+    #
+    # yt.py
+    # signal.py
     # calculator.py
-    # hello.txt
-    # index.html
+    #
+
     filename_pattern = (
         rf"\b[\w\-. ]+\.({FILE_EXTENSIONS})\b"
     )
 
-    has_filename = bool(
-        re.search(filename_pattern, text, re.IGNORECASE)
-    )
-
-    if not has_filename:
+    if not re.search(
+        filename_pattern,
+        text,
+        re.IGNORECASE
+    ):
         return False
 
-    # If a filename is explicitly mentioned with an action,
-    # treat it as a file request.
-    action_words = [
+    action_words = (
         "create",
         "make",
         "write",
@@ -135,83 +339,60 @@ def user_wants_file(user_input):
         "edit",
         "modify",
         "update",
-    ]
+    )
 
-    return any(word in text for word in action_words)
-
-
-# =========================================================
-# DETECT OBS
-# =========================================================
-
-def user_wants_obs(user_input):
-    text = user_input.lower().strip()
-
-    return (
-        "open obs" in text
-        or "launch obs" in text
-        or "start obs" in text
-        or "open obs studio" in text
+    return any(
+        word in text
+        for word in action_words
     )
 
 
 # =========================================================
-# DETECT BRAVE
-# =========================================================
-
-def user_wants_brave(user_input):
-    text = user_input.lower().strip()
-
-    return (
-        "open brave" in text
-        or "launch brave" in text
-        or "start brave" in text
-    )
-
-
-# =========================================================
-# EXTRACT USER NAME
+# NAME MEMORY
 # =========================================================
 
 def detect_user_name(user_input):
     global USER_NAME
 
-    text = user_input.strip()
-
-    patterns = [
+    patterns = (
         r"\bmy name is ([A-Za-z][A-Za-z0-9 _-]{0,40})",
         r"\bcall me ([A-Za-z][A-Za-z0-9 _-]{0,40})",
         r"\bi am ([A-Za-z][A-Za-z0-9 _-]{0,40})",
         r"\bi'm ([A-Za-z][A-Za-z0-9 _-]{0,40})",
-    ]
+    )
+
+    blocked = {
+        "a",
+        "an",
+        "the",
+        "going",
+        "fine",
+        "good",
+        "okay",
+        "ok",
+        "here",
+        "looking",
+        "trying",
+        "using",
+    }
 
     for pattern in patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
+
+        match = re.search(
+            pattern,
+            user_input.strip(),
+            re.IGNORECASE
+        )
 
         if match:
-            name = match.group(1).strip()
 
-            # Avoid accidentally treating common sentences
-            # as names.
-            blocked = {
-                "a",
-                "an",
-                "the",
-                "going",
-                "fine",
-                "good",
-                "okay",
-                "ok",
-                "here",
-                "looking",
-                "trying",
-                "using",
-            }
+            name = match.group(1).strip()
 
             if name.lower() in blocked:
                 return None
 
             USER_NAME = name
+
             return name
 
     return None
@@ -230,8 +411,11 @@ def ask_normal_ai(user_input):
         }
     ]
 
-    # Add previous conversation
-    messages.extend(conversation)
+    messages.extend(
+        conversation[
+            -MAX_HISTORY_MESSAGES:
+        ]
+    )
 
     messages.append(
         {
@@ -242,12 +426,15 @@ def ask_normal_ai(user_input):
 
     response = chat(
         model=MODEL,
-        messages=messages
+        messages=messages,
+        options=CHAT_OPTIONS,
     )
 
-    answer = response.message.content.strip()
+    answer = (
+        response.message.content
+        .strip()
+    )
 
-    # Save conversation
     conversation.append(
         {
             "role": "user",
@@ -262,6 +449,11 @@ def ask_normal_ai(user_input):
         }
     )
 
+    if len(conversation) > MAX_HISTORY_MESSAGES:
+        del conversation[
+            :-MAX_HISTORY_MESSAGES
+        ]
+
     return answer
 
 
@@ -271,112 +463,78 @@ def ask_normal_ai(user_input):
 
 def ask_file_ai(user_input):
 
-    file_system_prompt = f"""
-You are Jarvis's file creation assistant.
+    """
+    Generate a complete file using JSON mode.
 
-The user explicitly wants a file created or modified.
+    Qwen returns:
 
-Your job is to determine:
+    {
+        "filename": "yt.py",
+        "content": "..."
+    }
+    """
 
-1. The filename
-2. The COMPLETE contents of the file
+    prompt = f"""
+You are Jarvis's file creation engine.
 
-You MUST return a create_file function call whenever possible.
+The user explicitly wants a file created.
 
-The safe folder is:
+Return ONLY valid JSON.
+
+Required format:
+
+{{
+    "filename": "example.py",
+    "content": "complete file contents",
+    "skill_name": "Example",
+    "triggers": [
+        "example",
+        "open example",
+        "run example"
+    ],
+    "description": "Short description"
+}}
+
+RULES:
+
+1. filename must be ONLY the filename.
+2. Never put a path in filename.
+3. content must contain the COMPLETE actual code/text.
+4. Do NOT use markdown code fences.
+5. Do NOT explain anything outside the JSON.
+6. skill_name should describe what the script does.
+7. triggers should contain natural commands the user
+   could say to Jarvis to run this skill.
+8. Keep triggers short and useful.
+9. The generated Python file must be directly executable.
+10. If the user asks to open a website/app, generate code
+    that actually opens it instead of calling an API unless
+    the user explicitly asks for an API.
+11. The file will be saved inside:
 
 {SAFE_FOLDER}
 
-IMPORTANT:
+USER REQUEST:
 
-filename:
-- Must be only the filename.
-- Example: test.py
-- Do not include the folder path.
-
-content:
-- Must contain the COMPLETE actual file contents.
-- content MUST be a plain string.
-- Do NOT put JSON schema inside content.
-- Do NOT put tool definitions inside content.
-- Do NOT explain how to create the file.
-- Do NOT use markdown fences around the code.
-- Do NOT return an explanation instead of the file.
-
-For example:
-
-User:
-write a hello world program in test.py
-
-The file content should be:
-
-print("Hello World")
-
-Another example:
-
-User:
-write a simple calculator code in calculator.py
-
-The content should be actual Python code such as:
-
-def add(a, b):
-    return a + b
-
-...
-
-Use the create_file tool.
+{user_input}
 """
 
-    response = chat(
+    return chat(
         model=MODEL,
         messages=[
             {
-                "role": "system",
-                "content": file_system_prompt
-            },
-            {
                 "role": "user",
-                "content": user_input
+                "content": prompt
             }
         ],
-        tools=[
-            {
-                "type": "function",
-                "function": {
-                    "name": "create_file",
-                    "description": (
-                        "Create a file inside "
-                        f"{SAFE_FOLDER}"
-                    ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "filename": {
-                                "type": "string",
-                                "description": (
-                                    "Filename only, such as "
-                                    "test.py"
-                                )
-                            },
-                            "content": {
-                                "type": "string",
-                                "description": (
-                                    "Complete actual file "
-                                    "contents as a plain string."
-                                )
-                            }
-                        },
-                        "required": [
-                            "filename",
-                            "content"
-                        ]
-                    }
-                }
-            }
-        ]
+        format="json",
+        options={
+            "temperature": 0.1,
+            "num_ctx": 4096,
+            "num_predict": 2048,
+            "keep_alive": "10m",
+        },
     )
-
-    return response
 
 
 # =========================================================
@@ -385,21 +543,36 @@ Use the create_file tool.
 
 def clean_filename(filename):
 
-    if not isinstance(filename, str):
+    if not isinstance(
+        filename,
+        str
+    ):
         return None
 
-    filename = filename.strip()
+    filename = (
+        filename
+        .strip()
+        .strip('"')
+        .strip("'")
+    )
 
-    filename = filename.strip('"')
-    filename = filename.strip("'")
+    filename = os.path.basename(
+        filename
+    )
 
-    # Convert Windows paths into just the filename.
-    filename = filename.replace("\\", "/")
+    if not filename:
+        return None
 
-    if "/" in filename:
-        filename = filename.split("/")[-1]
+    if filename in {
+        ".",
+        ".."
+    }:
+        return None
 
-    return filename.strip()
+    if ".." in filename:
+        return None
+
+    return filename
 
 
 # =========================================================
@@ -408,7 +581,10 @@ def clean_filename(filename):
 
 def clean_content(content):
 
-    if not isinstance(content, str):
+    if not isinstance(
+        content,
+        str
+    ):
         return None
 
     content = content.strip()
@@ -421,310 +597,221 @@ def clean_content(content):
         if lines:
             lines = lines[1:]
 
-        if lines and lines[-1].strip() == "```":
+        if (
+            lines
+            and lines[-1].strip() == "```"
+        ):
             lines = lines[:-1]
 
-        content = "\n".join(lines).strip()
-
-    # Reject obvious schema output.
-    bad_patterns = [
-        '"type": "string"',
-        '"description":',
-        '"properties":',
-        '"required":',
-    ]
-
-    if all(pattern in content for pattern in bad_patterns[:2]):
-        return None
+        content = "\n".join(
+            lines
+        ).strip()
 
     return content
 
 
 # =========================================================
-# CREATE FILE FROM ARGUMENTS
+# CREATE FILE + REGISTER SKILL
 # =========================================================
 
-def create_file_from_arguments(arguments):
+def create_file_from_response(response):
 
-    if not isinstance(arguments, dict):
-        print("AI: Invalid file arguments.")
-        return True
+    try:
+
+        text = (
+            response.message.content
+            .strip()
+        )
+
+        data = json.loads(text)
+
+    except Exception as e:
+
+        print(
+            "AI: I couldn't generate "
+            "valid file data."
+        )
+
+        return
+
+    if not isinstance(
+        data,
+        dict
+    ):
+        print(
+            "AI: Invalid file data."
+        )
+
+        return
+
+    # -----------------------------------------------------
+    # FILE
+    # -----------------------------------------------------
 
     filename = clean_filename(
-        arguments.get("filename")
+        data.get("filename")
     )
 
     content = clean_content(
-        arguments.get("content")
+        data.get("content")
     )
 
     if not filename:
-        print("AI: I couldn't determine the filename.")
-        return True
+
+        print(
+            "AI: I couldn't determine "
+            "a safe filename."
+        )
+
+        return
 
     if content is None:
+
         print(
-            "AI: The model did not provide valid file content."
+            "AI: I couldn't generate "
+            "valid file content."
         )
-        return True
 
-    # Extra safety:
-    # only allow normal filenames, not paths.
-    if (
-        ".." in filename
-        or "/" in filename
-        or "\\" in filename
-    ):
-        print("AI: Invalid filename.")
-        return True
+        return
 
-    success = create_file(
+    # -----------------------------------------------------
+    # CREATE / REPLACE FILE
+    # -----------------------------------------------------
+
+    if not create_file(
         filename,
         content
-    )
-
-    if success:
+    ):
         print(
-            f"AI: Done. Created {filename} in "
-            f"{SAFE_FOLDER}"
+            "AI: I couldn't create the file."
         )
-    else:
-        print("AI: I couldn't create the file.")
 
-    return True
-
-
-# =========================================================
-# FIND JSON TOOL CALL IN TEXT
-# =========================================================
-
-def find_create_file_json(text):
-
-    text = text.strip()
-
-    # First try normal JSON.
-    try:
-        data = json.loads(text)
-
-        if isinstance(data, dict):
-            if data.get("name") == "create_file":
-                return data
-
-            if data.get("function") == "create_file":
-                return data
-
-    except json.JSONDecodeError:
-        pass
-
-    # Try to locate a JSON object inside surrounding text.
-    start_positions = [
-        m.start()
-        for m in re.finditer(r"\{", text)
-    ]
-
-    for start in start_positions:
-
-        depth = 0
-        in_string = False
-        escape = False
-
-        for i in range(start, len(text)):
-
-            char = text[i]
-
-            if escape:
-                escape = False
-                continue
-
-            if char == "\\" and in_string:
-                escape = True
-                continue
-
-            if char == '"':
-                in_string = not in_string
-                continue
-
-            if in_string:
-                continue
-
-            if char == "{":
-                depth += 1
-
-            elif char == "}":
-                depth -= 1
-
-                if depth == 0:
-
-                    candidate = text[start:i + 1]
-
-                    try:
-                        data = json.loads(candidate)
-
-                        if isinstance(data, dict):
-
-                            if data.get("name") == "create_file":
-                                return data
-
-                            if (
-                                isinstance(
-                                    data.get("function"),
-                                    dict
-                                )
-                                and
-                                data["function"].get("name")
-                                == "create_file"
-                            ):
-                                return data
-
-                    except json.JSONDecodeError:
-                        pass
-
-                    break
-
-    return None
-
-
-# =========================================================
-# EXECUTE FILE REQUEST
-# =========================================================
-
-def execute_file_request(response):
-
-    message = response.message
+        return
 
     # -----------------------------------------------------
-    # Native Ollama tool call
+    # REGISTER SKILL
     # -----------------------------------------------------
 
-    tool_calls = getattr(
-        message,
-        "tool_calls",
-        None
+    skill_name = data.get(
+        "skill_name"
     )
 
-    if tool_calls:
+    if not isinstance(
+        skill_name,
+        str
+    ) or not skill_name.strip():
 
-        for tool_call in tool_calls:
+        # Fallback:
+        # yt.py -> Yt
+        skill_name = os.path.splitext(
+            filename
+        )[0].replace(
+            "_",
+            " "
+        ).replace(
+            "-",
+            " "
+        ).title()
 
-            function = getattr(
-                tool_call,
-                "function",
-                None
-            )
+    triggers = data.get(
+        "triggers",
+        []
+    )
 
-            if not function:
-                continue
+    if not isinstance(
+        triggers,
+        list
+    ):
+        triggers = []
 
-            function_name = getattr(
-                function,
-                "name",
-                None
-            )
+    # Always make filename itself usable.
+    if filename.lower() not in [
+        str(x).lower()
+        for x in triggers
+        if isinstance(x, str)
+    ]:
+        triggers.append(
+            filename.lower()
+        )
 
-            if function_name != "create_file":
-                continue
-
-            arguments = getattr(
-                function,
-                "arguments",
-                {}
-            )
-
-            if isinstance(arguments, str):
-
-                try:
-                    arguments = json.loads(arguments)
-
-                except json.JSONDecodeError:
-                    print("AI: Invalid tool arguments.")
-                    return True
-
-            return create_file_from_arguments(
-                arguments
-            )
-
-    # -----------------------------------------------------
-    # JSON returned as text
-    # -----------------------------------------------------
-
-    text = getattr(
-        message,
-        "content",
+    description = data.get(
+        "description",
         ""
     )
 
-    if not text:
-        return False
-
-    text = text.strip()
-
-    data = find_create_file_json(text)
-
-    if not data:
-        return False
-
-    # Format:
-    #
-    # {
-    #   "name": "create_file",
-    #   "arguments": {...}
-    # }
-
-    arguments = data.get(
-        "arguments",
-        {}
+    registered = register_skill(
+        skill_name,
+        filename,
+        triggers,
+        description
     )
 
-    if isinstance(arguments, str):
+    if registered:
 
-        try:
-            arguments = json.loads(arguments)
+        print(
+            f"AI: Created {filename} "
+            f"and registered "
+            f"'{skill_name}' as a skill."
+        )
 
-        except json.JSONDecodeError:
-            print("AI: Invalid file arguments.")
-            return True
+    else:
 
-    return create_file_from_arguments(
-        arguments
-    )
+        print(
+            f"AI: Created {filename}, "
+            f"but couldn't register "
+            f"the skill."
+        )
 
 
 # =========================================================
-# MAIN JARVIS LOOP
+# MAIN LOOP
 # =========================================================
 
 while True:
 
     try:
-        user_input = input("\nYou: ").strip()
 
-    except KeyboardInterrupt:
-        print("\nGoodbye!")
-        break
+        user_input = input(
+            "\nYou: "
+        ).strip()
 
-    except EOFError:
-        print("\nGoodbye!")
+    except (
+        KeyboardInterrupt,
+        EOFError
+    ):
+
+        print(
+            "\nGoodbye!"
+        )
+
         break
 
     if not user_input:
         continue
 
-    # -----------------------------------------------------
-    # EXIT
-    # -----------------------------------------------------
+    lower = user_input.lower()
 
-    if user_input.lower() in [
+
+    # =====================================================
+    # EXIT
+    # =====================================================
+
+    if lower in {
         "exit",
         "quit",
         "bye"
-    ]:
+    }:
 
-        print("Goodbye!")
+        print(
+            "Goodbye!"
+        )
+
         break
 
-    # -----------------------------------------------------
-    # REMEMBER USER NAME
-    # -----------------------------------------------------
+
+    # =====================================================
+    # NAME MEMORY
+    # =====================================================
 
     detected_name = detect_user_name(
         user_input
@@ -732,60 +819,61 @@ while True:
 
     if detected_name:
 
+        answer = (
+            f"Nice to meet you, "
+            f"{detected_name}!"
+        )
+
         print(
-            f"AI: Nice to meet you, {detected_name}!"
+            "AI:",
+            answer
         )
 
-        conversation.append(
-            {
-                "role": "user",
-                "content": user_input
-            }
-        )
-
-        conversation.append(
-            {
-                "role": "assistant",
-                "content": (
-                    f"Nice to meet you, "
-                    f"{detected_name}!"
-                )
-            }
+        conversation.extend(
+            [
+                {
+                    "role": "user",
+                    "content": user_input
+                },
+                {
+                    "role": "assistant",
+                    "content": answer
+                },
+            ]
         )
 
         continue
 
-    # -----------------------------------------------------
-    # WHAT IS MY NAME?
-    # -----------------------------------------------------
+
+    # =====================================================
+    # NAME QUESTIONS
+    # =====================================================
 
     if re.search(
         r"\bwhat('?s| is) my name\b",
-        user_input.lower()
+        lower
     ):
 
         if USER_NAME:
 
             print(
-                f"AI: Your name is {USER_NAME}."
+                f"AI: Your name is "
+                f"{USER_NAME}."
             )
 
         else:
 
             print(
-                "AI: I don't know your name yet. "
-                "Tell me by saying 'my name is ...'."
+                "AI: I don't know your "
+                "name yet."
             )
 
         continue
 
-    # -----------------------------------------------------
-    # WHAT IS YOUR NAME?
-    # -----------------------------------------------------
 
     if re.search(
         r"\bwhat('?s| is) your name\b",
-        user_input.lower()
+        lower
     ):
 
         print(
@@ -794,103 +882,62 @@ while True:
 
         continue
 
-    # -----------------------------------------------------
-    # OBS
-    # -----------------------------------------------------
 
-    if user_wants_obs(user_input):
+    # =====================================================
+    # IMPORTANT:
+    # FILE CREATION MUST COME FIRST
+    # =====================================================
+    #
+    # This fixes:
+    #
+    # "write a code to open youtube in yt.py"
+    #
+    # We create/update yt.py instead of trying to
+    # execute an old/missing yt.py.
+    #
 
-        execute_command("open obs")
-
-        print("AI: Done.")
-        continue
-
-    # -----------------------------------------------------
-    # BRAVE
-    # -----------------------------------------------------
-
-    if user_wants_brave(user_input):
-
-        execute_command("open brave")
-
-        print("AI: Done.")
-        continue
-
-    # -----------------------------------------------------
-    # FILE CREATION
-    # -----------------------------------------------------
-
-    if user_wants_file(user_input):
+    if user_wants_file(
+        user_input
+    ):
 
         response = ask_file_ai(
             user_input
         )
 
-        handled = execute_file_request(
+        create_file_from_response(
             response
         )
 
-        if not handled:
-
-            text = getattr(
-                response.message,
-                "content",
-                ""
-            ).strip()
-
-            if text:
-
-                # One last attempt to detect JSON.
-                data = find_create_file_json(
-                    text
-                )
-
-                if data:
-
-                    arguments = data.get(
-                        "arguments",
-                        {}
-                    )
-
-                    if isinstance(
-                        arguments,
-                        str
-                    ):
-                        try:
-                            arguments = json.loads(
-                                arguments
-                            )
-                        except json.JSONDecodeError:
-                            arguments = {}
-
-                    create_file_from_arguments(
-                        arguments
-                    )
-
-                else:
-
-                    print(
-                        "AI:",
-                        text
-                    )
-
-            else:
-
-                print(
-                    "AI: I couldn't create the file."
-                )
-
         continue
 
-    # -----------------------------------------------------
-    # NORMAL CONVERSATION
-    # -----------------------------------------------------
 
-    result = ask_normal_ai(
+    # =====================================================
+    # FAST PC / SKILL ACTIONS
+    # =====================================================
+    #
+    # These do NOT use Qwen.
+    #
+
+    actions = detect_actions(
         user_input
     )
 
+    if actions:
+
+        perform_actions(
+            actions
+        )
+
+        continue
+
+
+    # =====================================================
+    # NORMAL LOCAL AI
+    # =====================================================
+
     print(
         "AI:",
-        result
+        ask_normal_ai(
+            user_input
+        )
     )

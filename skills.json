@@ -1,0 +1,48 @@
+{
+    "youtube": {
+        "name": "YouTube",
+        "filename": "yt.py",
+        "triggers": [
+            "open youtube",
+            "launch youtube",
+            "start youtube"
+        ],
+        "description": "Opens YouTube in the default web browser."
+    },
+    "open youtube": {
+        "name": "Open YouTube",
+        "filename": "yt.py",
+        "triggers": [
+            "yt",
+            "open yt",
+            "youtube",
+            "yt.py",
+            "open youtube",
+            "go to yt",
+            "go to youtube",
+            "yt2.py"
+        ],
+        "description": "Opens YouTube in the default web browser."
+    },
+    "open settings": {
+        "name": "Open Settings",
+        "filename": "setting.py",
+        "triggers": [
+            "open settings",
+            "go to settings",
+            "settings",
+            "setting.py"
+        ],
+        "description": "Opens the Windows Settings application."
+    },
+    "open obs": {
+        "name": "Open OBS",
+        "filename": "obs2.py",
+        "triggers": [
+            "open obs",
+            "start obs",
+            "obs2.py"
+        ],
+        "description": "Opens OBS application"
+    }
+}
