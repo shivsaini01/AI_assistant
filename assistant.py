@@ -3,16 +3,27 @@ import os
 import re
 
 from ollama import chat
+
 from commands import (
-    execute_command,
     create_file,
     register_skill,
+    find_skill,
+    execute_command,
+)
+
+from jarvis_tools import (
+    launch_app,
+    open_url,
+)
+
+from intent_parser import (
+    parse_user_intent,
 )
 
 
-# =========================================================
-# SETTINGS
-# =========================================================
+# ==================================================
+# CONFIGURATION
+# ==================================================
 
 MODEL = "qwen2.5:7b-instruct-q3_K_M"
 
@@ -23,615 +34,473 @@ SAFE_FOLDER = os.path.join(
     "skills"
 )
 
-MAX_HISTORY_MESSAGES = 12
 
-conversation = []
-
-USER_NAME = None
-
-
-# =========================================================
-# LOCAL AI SETTINGS
-# =========================================================
-
-CHAT_OPTIONS = {
-    "temperature": 0.3,
-    "num_ctx": 4096,
-    "num_predict": 512,
-    "keep_alive": "10m",
-}
-
-
-# =========================================================
-# NORMAL AI SYSTEM PROMPT
-# =========================================================
-
-SYSTEM_PROMPT = """
-You are Jarvis, a fast local PC assistant.
-
-Your name is Jarvis.
-
-Answer normal questions naturally and directly.
-
-Do not claim you performed a computer action unless Python
-actually performed it.
-
-Do not invent PC capabilities.
-
-Keep normal answers concise unless the user asks for detail.
-
-Approved PC skills are handled by Python before this prompt
-is called.
-
-If the user asks for code, answer normally unless they
-explicitly ask you to create/write/save the code into a file.
-"""
-
-
-# =========================================================
-# FAST ACTION DETECTION
-# =========================================================
-
-ACTION_WORDS = (
-    "open",
-    "launch",
-    "start",
-    "run",
-    "fire up",
-    "bring up",
-    "get up",
-    "load",
-    "turn on",
-)
-
-NEGATIVE_WORDS = (
-    "what is",
-    "what's",
-    "who is",
-    "tell me about",
-    "explain",
-    "how does",
-    "meaning of",
-    "about",
-)
-
-
-def has_action_intent(text):
-    text = text.lower().strip()
-
-    if any(
-        phrase in text
-        for phrase in NEGATIVE_WORDS
-    ):
-        return False
-
-    return any(
-        word in text
-        for word in ACTION_WORDS
-    )
-
-
-def detect_actions(user_input):
-    """
-    Detect registered/approved applications quickly.
-
-    IMPORTANT:
-    This function should NOT run for file-creation requests.
-    File requests are handled first in the main loop.
-    """
-
-    text = re.sub(
-        r"\s+",
-        " ",
-        user_input.lower().strip()
-    )
-
-    if not has_action_intent(text):
-        return []
-
-    found = []
-
-    # -----------------------------------------------------
-    # OBS
-    # -----------------------------------------------------
-
-    obs_targets = (
-        "obs",
-        "obs studio",
-        "streaming setup",
-        "streaming software",
-        "recording setup",
-        "recording software",
-        "stream setup",
-    )
-
-    if any(
-        target in text
-        for target in obs_targets
-    ):
-        found.append("open_obs")
-
-    # -----------------------------------------------------
-    # BRAVE
-    # -----------------------------------------------------
-
-    brave_targets = (
-        "brave",
-        "brave browser",
-        "my browser",
-        "the browser",
-        "browser",
-    )
-
-    if any(
-        target in text
-        for target in brave_targets
-    ):
-        found.append("open_brave")
-
-    # -----------------------------------------------------
-    # THE LAST OF US
-    # -----------------------------------------------------
-
-    tlou_targets = (
-        "the last of us",
-        "last of us",
-        "tlou",
-        "the game",
-        "my game",
-    )
-
-    if any(
-        target in text
-        for target in tlou_targets
-    ):
-        found.append("open_last_of_us")
-
-    # -----------------------------------------------------
-    # DYNAMIC SKILLS
-    # -----------------------------------------------------
-    #
-    # Example:
-    #
-    # YouTube -> yt.py
-    #
-    # Signal -> signal.py
-    #
-    # These are resolved by commands.py.
-    #
-
-    if not found:
-        skill = None
-
-        try:
-            from commands import find_skill
-
-            skill = find_skill(text)
-
-        except Exception:
-            skill = None
-
-        if skill:
-            found.append(
-                skill
-                .get("name", "")
-                .strip()
-                .lower()
-            )
-
-    return list(
-        dict.fromkeys(found)
-    )
-
-
-# =========================================================
-# ACTION MESSAGES
-# =========================================================
-
-ACTION_MESSAGES = {
-    "open_obs": "OBS is open.",
-    "open_brave": "Brave is open.",
-    "open_last_of_us": "The Last of Us is opening.",
-}
-
-
-def perform_actions(actions):
-    for action in actions:
-        result = execute_command(action)
-
-        if result and result.get("success"):
-            filename = result.get("filename", "")
-            name = result.get("name", "Skill")
-
-            if filename:
-                print(f"AI: Running {filename} — Opening {name}...")
-            else:
-                print(f"AI: Opening {name}...")
-
-        elif result:
-            filename = result.get("filename", "")
-            name = result.get("name", "skill")
-
-            if filename:
-                print(f"AI: Couldn't run {filename}.")
-            else:
-                print(f"AI: Couldn't open {name}.")
-
-        else:
-            print(f"AI: I couldn't find a skill for {action}.")
-
-
-# =========================================================
+# ==================================================
 # FILE REQUEST DETECTION
-# =========================================================
+# ==================================================
 
-FILE_EXTENSIONS = (
-    "py|txt|json|html|htm|css|js|jsx|ts|tsx|"
-    "cpp|c|h|java|md|csv|xml|yaml|yml|sql|sh|bat|ps1"
-)
-
-
-FILE_ACTIONS = (
+FILE_ACTIONS = [
     "create a file",
     "create file",
     "make a file",
     "make file",
     "write a file",
+    "write file",
     "save a file",
-    "create a python file",
-    "make a python file",
-    "create a text file",
-    "make a text file",
-    "create a script",
-    "make a script",
-    "write code in",
-    "write code into",
-    "write code to",
-    "put code in",
-    "put code into",
-    "save code in",
-    "save code to",
-)
+    "save file",
+    "generate a file",
+    "generate file",
+]
 
 
-def user_wants_file(text):
-    """
-    Detect explicit file-generation requests.
+def is_file_request(text):
 
-    This MUST run before action detection.
-    """
-
-    text = text.lower().strip()
-
-    # Strong explicit file request.
-    if any(
-        phrase in text
-        for phrase in FILE_ACTIONS
-    ):
-        return True
-
-    # Filename such as:
-    #
-    # yt.py
-    # signal.py
-    # calculator.py
-
-    filename_pattern = (
-        rf"\b[\w\-. ]+\.({FILE_EXTENSIONS})\b"
-    )
-
-    if not re.search(
-        filename_pattern,
-        text,
-        re.IGNORECASE
-    ):
-        return False
-
-    action_words = (
-        "create",
-        "make",
-        "write",
-        "save",
-        "put",
-        "add",
-        "generate",
-        "edit",
-        "modify",
-        "update",
-    )
+    text_lower = text.lower()
 
     return any(
-        word in text
-        for word in action_words
+        phrase in text_lower
+        for phrase in FILE_ACTIONS
     )
 
 
-# =========================================================
-# NAME MEMORY
-# =========================================================
+# ==================================================
+# KNOWN WEBSITE FALLBACK
+# ==================================================
 
-def detect_user_name(user_input):
-    global USER_NAME
+def detect_known_website(text):
 
-    patterns = (
-        r"\bmy name is ([A-Za-z][A-Za-z0-9 _-]{0,40})",
-        r"\bcall me ([A-Za-z][A-Za-z0-9 _-]{0,40})",
-        r"\bi am ([A-Za-z][A-Za-z0-9 _-]{0,40})",
-        r"\bi'm ([A-Za-z][A-Za-z0-9 _-]{0,40})",
-    )
+    text_lower = text.lower()
 
-    blocked = {
-        "a",
-        "an",
-        "the",
-        "going",
-        "fine",
-        "good",
-        "okay",
-        "ok",
-        "here",
-        "looking",
-        "trying",
-        "using",
-    }
+    if "youtube" in text_lower:
 
-    for pattern in patterns:
+        return "https://www.youtube.com"
 
-        match = re.search(
-            pattern,
-            user_input.strip(),
-            re.IGNORECASE
-        )
+    if "chatgpt" in text_lower:
 
-        if match:
+        return "https://chatgpt.com"
 
-            name = match.group(1).strip()
+    if "gmail" in text_lower:
 
-            if name.lower() in blocked:
-                return None
+        return "https://mail.google.com"
 
-            USER_NAME = name
+    if (
+        "google" in text_lower
+        and "chrome" not in text_lower
+    ):
 
-            return name
+        return "https://www.google.com"
 
     return None
 
 
-# =========================================================
-# NORMAL AI
-# =========================================================
+# ==================================================
+# VALIDATE APP NAME
+# ==================================================
 
-def ask_normal_ai(user_input):
+def is_safe_app_name(app_name):
 
-    messages = [
-        {
-            "role": "system",
-            "content": SYSTEM_PROMPT
-        }
+    if not isinstance(
+        app_name,
+        str
+    ):
+        return False
+
+    app_name = app_name.strip()
+
+    if not app_name:
+
+        return False
+
+    # Prevent paths / command injection
+    forbidden = [
+        "\\",
+        "/",
+        ":",
+        ";",
+        "|",
+        "&",
+        ">",
+        "<",
+        '"',
+        "'",
     ]
 
-    messages.extend(
-        conversation[
-            -MAX_HISTORY_MESSAGES:
-        ]
+    return not any(
+        char in app_name
+        for char in forbidden
     )
 
-    messages.append(
-        {
-            "role": "user",
-            "content": user_input
-        }
+
+# ==================================================
+# VALIDATE URL
+# ==================================================
+
+def is_safe_url(url):
+
+    if not isinstance(
+        url,
+        str
+    ):
+        return False
+
+    url = url.strip()
+
+    return (
+        url.startswith(
+            "https://"
+        )
+        or
+        url.startswith(
+            "http://"
+        )
     )
 
-    response = chat(
-        model=MODEL,
-        messages=messages,
-        options=CHAT_OPTIONS,
+
+# ==================================================
+# HANDLE CHAT ACTION
+# ==================================================
+
+def handle_chat(text):
+
+    if not text:
+
+        return
+
+    answer = ask_ai(
+        text
     )
 
-    answer = (
-        response.message.content
-        .strip()
+    print(
+        f"Jarvis: {answer}"
     )
 
-    conversation.append(
-        {
-            "role": "user",
-            "content": user_input
-        }
+
+# ==================================================
+# HANDLE APP ACTION
+# ==================================================
+
+def handle_launch_apps(apps):
+
+    if not isinstance(
+        apps,
+        list
+    ):
+        return
+
+    for app_name in apps:
+
+        if not is_safe_app_name(
+            app_name
+        ):
+
+            print(
+                f"Jarvis: I couldn't use that application name."
+            )
+
+            continue
+
+        app_name = app_name.strip()
+
+        print(
+            f"Jarvis: 🔍 Looking for {app_name.title()}..."
+        )
+
+        success, message = launch_app(
+            app_name
+        )
+
+        if success:
+
+            print(
+                f"Jarvis: ✅ {message}"
+            )
+
+        else:
+
+            print(
+                f"Jarvis: ❌ {message}"
+            )
+
+
+# ==================================================
+# HANDLE URL
+# ==================================================
+
+def handle_open_url(url):
+
+    if not is_safe_url(
+        url
+    ):
+
+        print(
+            "Jarvis: ❌ Invalid website address."
+        )
+
+        return
+
+    success, message = open_url(
+        url
     )
 
-    conversation.append(
-        {
-            "role": "assistant",
-            "content": answer
-        }
+    if success:
+
+        print(
+            f"Jarvis: ✅ {message}"
+        )
+
+    else:
+
+        print(
+            f"Jarvis: ❌ {message}"
+        )
+
+
+# ==================================================
+# HANDLE SKILL
+# ==================================================
+
+def handle_skill(skill_name):
+
+    if not skill_name:
+
+        return False
+
+    skill = find_skill(
+        skill_name
     )
 
-    if len(conversation) > MAX_HISTORY_MESSAGES:
-        del conversation[
-            :-MAX_HISTORY_MESSAGES
-        ]
+    if not skill:
 
-    return answer
+        return False
+
+    return execute_command(
+        skill.get(
+            "filename"
+        )
+    )
 
 
-# =========================================================
+# ==================================================
+# PROCESS MULTIPLE ACTIONS
+# ==================================================
+
+def process_actions(result):
+
+    if not result:
+
+        return False
+
+    actions = result.get(
+        "actions",
+        []
+    )
+
+    if not isinstance(
+        actions,
+        list
+    ):
+        return False
+
+    processed = False
+
+    for action in actions:
+
+        if not isinstance(
+            action,
+            dict
+        ):
+            continue
+
+        action_type = action.get(
+            "type"
+        )
+
+        # ------------------------------------------
+        # CHAT
+        # ------------------------------------------
+
+        if action_type == "chat":
+
+            text = action.get(
+                "text",
+                ""
+            )
+
+            if text:
+
+                handle_chat(
+                    text
+                )
+
+                processed = True
+
+        # ------------------------------------------
+        # LAUNCH APP
+        # ------------------------------------------
+
+        elif action_type == "launch_app":
+
+            apps = action.get(
+                "apps",
+                []
+            )
+
+            if apps:
+
+                handle_launch_apps(
+                    apps
+                )
+
+                processed = True
+
+        # ------------------------------------------
+        # OPEN URL
+        # ------------------------------------------
+
+        elif action_type == "open_url":
+
+            url = action.get(
+                "url",
+                ""
+            )
+
+            if url:
+
+                handle_open_url(
+                    url
+                )
+
+                processed = True
+
+        # ------------------------------------------
+        # NONE
+        # ------------------------------------------
+
+        elif action_type == "none":
+
+            continue
+
+    return processed
+
+
+# ==================================================
 # FILE AI
-# =========================================================
+# ==================================================
 
-def ask_file_ai(user_input):
-
-    """
-    Generate a complete file using JSON mode.
-
-    Qwen returns:
-
-    {
-        "filename": "yt.py",
-        "content": "..."
-    }
-    """
+def ask_file_ai(user_text):
 
     prompt = f"""
-You are Jarvis's file creation engine.
+You are Jarvis's file-generation assistant.
 
-The user explicitly wants a file created.
+The user wants to create a file.
 
-Return ONLY valid JSON.
+User request:
 
-Required format:
+{user_text}
 
-{{
-    "filename": "example.py",
-    "content": "complete file contents",
-    "skill_name": "Example",
-    "triggers": [
-        "example",
-        "open example",
-        "run example"
-    ],
-    "description": "Short description"
-}}
-
-RULES:
-
-1. filename must be ONLY the filename.
-2. Never put a path in filename.
-3. content must contain the COMPLETE actual code/text.
-4. Do NOT use markdown code fences.
-5. Do NOT explain anything outside the JSON.
-6. skill_name should describe what the script does.
-7. triggers should contain natural commands the user
-   could say to Jarvis to run this skill.
-8. Keep triggers short and useful.
-9. The generated Python file must be directly executable.
-10. If the user asks to open a website/app, generate code
-    that actually opens it instead of calling an API unless
-    the user explicitly asks for an API.
-11. The file will be saved directly inside:
+The file will be saved directly inside:
 
 {SAFE_FOLDER}
 
-USER REQUEST:
+Return ONLY valid JSON.
 
-{user_input}
+Format:
+
+{{
+    "filename": "example.py",
+    "content": "complete file content here",
+    "skill_name": "Example Skill",
+    "triggers": ["example", "run example"],
+    "description": "What this skill does"
+}}
+
+Rules:
+
+1. Return valid JSON only.
+2. Do not use markdown code fences.
+3. Do not include explanations outside JSON.
+4. filename must be a simple filename.
+5. Do not include folder paths.
+6. Do not use ".." in the filename.
+7. If this is a Python skill, provide complete runnable Python code.
 """
 
-    return chat(
-        model=MODEL,
-        messages=[
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ],
-        format="json",
-        options={
-            "temperature": 0.1,
-            "num_ctx": 4096,
-            "num_predict": 2048,
-            "keep_alive": "10m",
-        },
-    )
+    try:
+
+        response = chat(
+            model=MODEL,
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ]
+        )
+
+        content = response[
+            "message"
+        ][
+            "content"
+        ].strip()
+
+        content = re.sub(
+            r"^```json\s*",
+            "",
+            content,
+            flags=re.IGNORECASE
+        )
+
+        content = re.sub(
+            r"^```\s*",
+            "",
+            content
+        )
+
+        content = re.sub(
+            r"\s*```$",
+            "",
+            content
+        )
+
+        return json.loads(
+            content
+        )
+
+    except Exception as e:
+
+        print(
+            f"File AI error: {e}"
+        )
+
+        return None
 
 
-# =========================================================
+# ==================================================
 # CLEAN FILENAME
-# =========================================================
+# ==================================================
 
 def clean_filename(filename):
 
-    if not isinstance(
-        filename,
-        str
-    ):
-        return None
+    if not filename:
 
-    filename = (
-        filename
-        .strip()
-        .strip('"')
-        .strip("'")
-    )
+        return None
 
     filename = os.path.basename(
-        filename
-    )
-
-    if not filename:
-        return None
-
-    if filename in {
-        ".",
-        ".."
-    }:
-        return None
+        str(filename)
+    ).strip()
 
     if ".." in filename:
+
         return None
 
     return filename
 
 
-# =========================================================
-# CLEAN CONTENT
-# =========================================================
+# ==================================================
+# CREATE FILE
+# ==================================================
 
-def clean_content(content):
-
-    if not isinstance(
-        content,
-        str
-    ):
-        return None
-
-    content = content.strip()
-
-    # Remove accidental markdown fences.
-    if content.startswith("```"):
-
-        lines = content.splitlines()
-
-        if lines:
-            lines = lines[1:]
-
-        if (
-            lines
-            and lines[-1].strip() == "```"
-        ):
-            lines = lines[:-1]
-
-        content = "\n".join(
-            lines
-        ).strip()
-
-    return content
-
-
-# =========================================================
-# CREATE FILE + REGISTER SKILL
-# =========================================================
-
-def create_file_from_response(response):
-
-    try:
-
-        text = (
-            response.message.content
-            .strip()
-        )
-
-        data = json.loads(text)
-
-    except Exception:
-
-        print(
-            "AI: I couldn't generate "
-            "valid file data."
-        )
-
-        return
+def create_file_from_response(data):
 
     if not isinstance(
         data,
@@ -639,295 +508,284 @@ def create_file_from_response(response):
     ):
 
         print(
-            "AI: Invalid file data."
+            "Jarvis: ❌ Invalid AI file response."
         )
 
-        return
-
-    # -----------------------------------------------------
-    # FILE
-    # -----------------------------------------------------
+        return False
 
     filename = clean_filename(
-        data.get("filename")
+        data.get(
+            "filename"
+        )
     )
 
-    content = clean_content(
-        data.get("content")
+    content = data.get(
+        "content",
+        ""
     )
-
-    if not filename:
-
-        print(
-            "AI: I couldn't determine "
-            "a safe filename."
-        )
-
-        return
-
-    if content is None:
-
-        print(
-            "AI: I couldn't generate "
-            "valid file content."
-        )
-
-        return
-
-    # -----------------------------------------------------
-    # CREATE / REPLACE FILE
-    # -----------------------------------------------------
-
-    if not create_file(
-        filename,
-        content
-    ):
-
-        print(
-            "AI: I couldn't create the file."
-        )
-
-        return
-
-    # -----------------------------------------------------
-    # REGISTER SKILL
-    # -----------------------------------------------------
 
     skill_name = data.get(
         "skill_name"
     )
-
-    if not isinstance(
-        skill_name,
-        str
-    ) or not skill_name.strip():
-
-        # Fallback:
-        # yt.py -> Yt
-        skill_name = os.path.splitext(
-            filename
-        )[0].replace(
-            "_",
-            " "
-        ).replace(
-            "-",
-            " "
-        ).title()
 
     triggers = data.get(
         "triggers",
         []
     )
 
-    if not isinstance(
-        triggers,
-        list
-    ):
-        triggers = []
-
-    # Always make filename itself usable.
-    if filename.lower() not in [
-        str(x).lower()
-        for x in triggers
-        if isinstance(x, str)
-    ]:
-        triggers.append(
-            filename.lower()
-        )
-
     description = data.get(
         "description",
         ""
     )
 
-    registered = register_skill(
-        skill_name,
+    if not filename:
+
+        print(
+            "Jarvis: ❌ Invalid filename."
+        )
+
+        return False
+
+    if not content:
+
+        print(
+            "Jarvis: ❌ File content is empty."
+        )
+
+        return False
+
+    success, result = create_file(
         filename,
-        triggers,
-        description
+        content
     )
 
-    if registered:
+    if not success:
 
         print(
-            f"AI: Created {filename} "
-            f"and registered "
-            f"'{skill_name}' as a skill."
+            f"Jarvis: ❌ {result}"
         )
 
-    else:
+        return False
+
+    print(
+        f"Jarvis: ✅ File created: {result}"
+    )
+
+    if filename.lower().endswith(
+        ".py"
+    ):
+
+        if not skill_name:
+
+            skill_name = os.path.splitext(
+                filename
+            )[0]
+
+        register_skill(
+            skill_name=skill_name,
+            filename=filename,
+            triggers=triggers,
+            description=description
+        )
 
         print(
-            f"AI: Created {filename}, "
-            f"but couldn't register "
-            f"the skill."
+            f"Jarvis: ✅ Skill registered: {skill_name}"
         )
 
+    return True
 
-# =========================================================
-# MAIN LOOP
-# =========================================================
 
-while True:
+# ==================================================
+# NORMAL AI
+# ==================================================
+
+def ask_ai(user_text):
 
     try:
 
-        user_input = input(
-            "\nYou: "
-        ).strip()
-
-    except (
-        KeyboardInterrupt,
-        EOFError
-    ):
-
-        print(
-            "\nGoodbye!"
-        )
-
-        break
-
-    if not user_input:
-        continue
-
-    lower = user_input.lower()
-
-
-    # =====================================================
-    # EXIT
-    # =====================================================
-
-    if lower in {
-        "exit",
-        "quit",
-        "bye"
-    }:
-
-        print(
-            "Goodbye!"
-        )
-
-        break
-
-
-    # =====================================================
-    # NAME MEMORY
-    # =====================================================
-
-    detected_name = detect_user_name(
-        user_input
-    )
-
-    if detected_name:
-
-        answer = (
-            f"Nice to meet you, "
-            f"{detected_name}!"
-        )
-
-        print(
-            "AI:",
-            answer
-        )
-
-        conversation.extend(
-            [
+        response = chat(
+            model=MODEL,
+            messages=[
                 {
                     "role": "user",
-                    "content": user_input
-                },
-                {
-                    "role": "assistant",
-                    "content": answer
-                },
+                    "content": user_text
+                }
             ]
         )
 
-        continue
+        return response[
+            "message"
+        ][
+            "content"
+        ]
+
+    except Exception as e:
+
+        return f"AI error: {e}"
 
 
-    # =====================================================
-    # NAME QUESTIONS
-    # =====================================================
+# ==================================================
+# MAIN
+# ==================================================
 
-    if re.search(
-        r"\bwhat('?s| is) my name\b",
-        lower
-    ):
+def main():
 
-        if USER_NAME:
-
-            print(
-                f"AI: Your name is "
-                f"{USER_NAME}."
-            )
-
-        else:
-
-            print(
-                "AI: I don't know your "
-                "name yet."
-            )
-
-        continue
-
-
-    if re.search(
-        r"\bwhat('?s| is) your name\b",
-        lower
-    ):
-
-        print(
-            "AI: My name is Jarvis."
-        )
-
-        continue
-
-
-    # =====================================================
-    # IMPORTANT:
-    # FILE CREATION MUST COME FIRST
-    # =====================================================
-
-    if user_wants_file(
-        user_input
-    ):
-
-        response = ask_file_ai(
-            user_input
-        )
-
-        create_file_from_response(
-            response
-        )
-
-        continue
-
-
-    # =====================================================
-    # FAST PC / SKILL ACTIONS
-    # =====================================================
-
-    actions = detect_actions(
-        user_input
-    )
-
-    if actions:
-
-        perform_actions(
-            actions
-        )
-
-        continue
-
-
-    # =====================================================
-    # NORMAL LOCAL AI
-    # =====================================================
+    print("=" * 60)
+    print("JARVIS SMART AI ASSISTANT")
+    print("=" * 60)
 
     print(
-        "AI:",
-        ask_normal_ai(
-            user_input
-        )
+        "Type 'exit' to quit."
     )
+
+    print()
+
+    while True:
+
+        try:
+
+            user_text = input(
+                "You: "
+            ).strip()
+
+        except (
+            KeyboardInterrupt,
+            EOFError
+        ):
+
+            print(
+                "\nJarvis: Goodbye."
+            )
+
+            break
+
+        if not user_text:
+
+            continue
+
+        # ------------------------------------------
+        # EXIT
+        # ------------------------------------------
+
+        if user_text.lower() in {
+            "exit",
+            "quit",
+            "bye"
+        }:
+
+            print(
+                "Jarvis: Goodbye."
+            )
+
+            break
+
+        # ------------------------------------------
+        # NAME
+        # ------------------------------------------
+
+        if user_text.lower().startswith(
+            "my name is "
+        ):
+
+            name = user_text[
+                11:
+            ].strip()
+
+            if name:
+
+                print(
+                    f"Jarvis: Nice to meet you, {name}."
+                )
+
+            continue
+
+        # ------------------------------------------
+        # FILE CREATION
+        # ------------------------------------------
+
+        if is_file_request(
+            user_text
+        ):
+
+            print(
+                "Jarvis: 🛠️ Creating the file..."
+            )
+
+            data = ask_file_ai(
+                user_text
+            )
+
+            if data:
+
+                create_file_from_response(
+                    data
+                )
+
+            else:
+
+                print(
+                    "Jarvis: ❌ I couldn't generate the file."
+                )
+
+            continue
+
+        # ------------------------------------------
+        # MULTI-INTENT PARSER
+        # ------------------------------------------
+
+        result = parse_user_intent(
+            user_text
+        )
+
+        # ------------------------------------------
+        # Fallback for known websites
+        # ------------------------------------------
+
+        if not result:
+
+            website = detect_known_website(
+                user_text
+            )
+
+            if website:
+
+                handle_open_url(
+                    website
+                )
+
+                continue
+
+        # ------------------------------------------
+        # PROCESS ALL ACTIONS
+        # ------------------------------------------
+
+        if result:
+
+            handled = process_actions(
+                result
+            )
+
+            if handled:
+
+                continue
+
+        # ------------------------------------------
+        # NORMAL AI FALLBACK
+        # ------------------------------------------
+
+        answer = ask_ai(
+            user_text
+        )
+
+        print(
+            f"Jarvis: {answer}"
+        )
+
+
+# ==================================================
+# START JARVIS
+# ==================================================
+
+if __name__ == "__main__":
+
+    main()

@@ -6,70 +6,192 @@ from app_detector import find_app
 
 
 # ==================================================
+# WINDOWS PROCESS FLAGS
+# ==================================================
+
+DETACHED_PROCESS = 0x00000008
+CREATE_NEW_PROCESS_GROUP = 0x00000200
+CREATE_NO_WINDOW = 0x08000000
+
+
+# ==================================================
 # JARVIS SAFE TOOLS
 # ==================================================
 
+
 def launch_app(app_name):
     """
-    Launch an approved application using app_detector.py.
+    Dynamically find and launch a Windows application.
+
+    The launched application is detached from the
+    Jarvis PowerShell console so its internal logs
+    do not appear in the Jarvis interface.
     """
 
     path = find_app(app_name)
 
     if not path:
-        return False, f"Application not found: {app_name}"
-
-    try:
-        # Use the application's folder as the working directory.
-        # This is important for applications like OBS that
-        # need to locate files such as en-US.ini.
-        working_dir = os.path.dirname(path)
-
-        subprocess.Popen(
-            [path],
-            cwd=working_dir,
-            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
+        return (
+            False,
+            f"{app_name.title()} was not found on this computer."
         )
 
-        return True, f"Started {app_name}"
+    try:
+
+        # ------------------------------------------
+        # WINDOWS SHORTCUT (.lnk / .url)
+        # ------------------------------------------
+
+        if path.lower().endswith(
+            (".lnk", ".url")
+        ):
+
+            subprocess.Popen(
+                [
+                    "explorer.exe",
+                    path
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=(
+                    DETACHED_PROCESS
+                    | CREATE_NEW_PROCESS_GROUP
+                    | CREATE_NO_WINDOW
+                ),
+                close_fds=True
+            )
+
+            return (
+                True,
+                f"{app_name.title()} launched successfully."
+            )
+
+        # ------------------------------------------
+        # EXECUTABLE (.exe)
+        # ------------------------------------------
+
+        if path.lower().endswith(".exe"):
+
+            working_dir = os.path.dirname(
+                path
+            )
+
+            subprocess.Popen(
+                [path],
+                cwd=working_dir,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=(
+                    DETACHED_PROCESS
+                    | CREATE_NEW_PROCESS_GROUP
+                    | CREATE_NO_WINDOW
+                ),
+                close_fds=True
+            )
+
+            return (
+                True,
+                f"{app_name.title()} launched successfully."
+            )
+
+        # ------------------------------------------
+        # UNSUPPORTED FILE
+        # ------------------------------------------
+
+        return (
+            False,
+            f"I found {app_name.title()}, but I cannot launch this file type."
+        )
 
     except Exception as e:
-        return False, f"Failed to start {app_name}: {e}"
+
+        return (
+            False,
+            f"I couldn't launch {app_name.title()}: {e}"
+        )
+
+
+# ==================================================
+# OPEN URL
+# ==================================================
 
 
 def open_url(url):
     """
-    Open a URL in the default browser.
+    Open a URL using the default browser.
     """
 
+    if not url:
+        return (
+            False,
+            "No URL was provided."
+        )
+
     try:
+
         webbrowser.open(url)
-        return True, f"Opened {url}"
+
+        return (
+            True,
+            "Website opened successfully."
+        )
 
     except Exception as e:
-        return False, f"Failed to open URL: {e}"
+
+        return (
+            False,
+            f"I couldn't open the website: {e}"
+        )
 
 
 # ==================================================
 # TEST
 # ==================================================
 
+
 if __name__ == "__main__":
 
-    print("=" * 50)
+    print("=" * 60)
     print("JARVIS TOOLS TEST")
-    print("=" * 50)
+    print("=" * 60)
+    print()
 
-    # Test OBS
-    success, message = launch_app("obs")
+    print("Testing Signal...")
+
+    success, message = launch_app(
+        "signal"
+    )
+
     print(message)
+    print()
 
-    # Test Brave
-    success, message = launch_app("brave")
+    print("Testing Discord...")
+
+    success, message = launch_app(
+        "discord"
+    )
+
     print(message)
+    print()
 
-    # Test URL
-    success, message = open_url("https://www.youtube.com")
+    print("Testing VS Code...")
+
+    success, message = launch_app(
+        "vscode"
+    )
+
     print(message)
+    print()
 
-    print("=" * 50)
+    print("Testing YouTube...")
+
+    success, message = open_url(
+        "https://www.youtube.com"
+    )
+
+    print(message)
+    print()
+
+    print("=" * 60)
